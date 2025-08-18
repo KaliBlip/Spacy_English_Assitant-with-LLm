@@ -82,8 +82,11 @@ async function callHuggingFaceAPI(
     return null
   }
 
+  console.log("[v0] Using Hugging Face API with token:", HF_API_TOKEN.substring(0, 10) + "...")
+
   try {
-    const response = await fetch("https://api-inference.huggingface.co/models/tiiuae/falcon-7b-instruct", {
+    // Using microsoft/DialoGPT-medium instead of Falcon (more accessible, no gating)
+    const response = await fetch("https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${HF_API_TOKEN}`,
@@ -101,15 +104,24 @@ async function callHuggingFaceAPI(
       }),
     })
 
+    console.log("[v0] HF API Response status:", response.status)
+    console.log("[v0] HF API Response headers:", Object.fromEntries(response.headers.entries()))
+
     if (!response.ok) {
-      console.error("Hugging Face API error:", response.status, response.statusText)
+      const errorText = await response.text()
+      console.error("[v0] Hugging Face API error details:", {
+        status: response.status,
+        statusText: response.statusText,
+        body: errorText,
+      })
       return null
     }
 
     const data = await response.json()
+    console.log("[v0] HF API Response data:", data)
 
     if (data.error) {
-      console.error("Hugging Face API error:", data.error)
+      console.error("[v0] Hugging Face API error in response:", data.error)
       return null
     }
 
@@ -124,7 +136,7 @@ async function callHuggingFaceAPI(
 
     return null
   } catch (error) {
-    console.error("Error calling Hugging Face API:", error)
+    console.error("[v0] Error calling Hugging Face API:", error)
     return null
   }
 }
@@ -445,6 +457,9 @@ function hasObviousGrammarErrors(text: string): boolean {
     /\b[a-z]+\s+selling\s*$/i, // ending with "selling" (incomplete phrase)
     /\b(he|she|it)\s+have\b/i, // he/she/it have (should be has)
     /\b(I|you|we|they)\s+has\b/i, // I/you/we/they has (should be have)
+    /\b[a-z]+\s+(go|come|run|jump|walk|play|eat|drink|sleep|work)\s+to\b/i, // "kofi go to school"
+    /\b[a-z]+\s+(go|come|run|jump|walk|play|eat|drink|sleep|work)\s+(home|school|work|store|market)\b/i, // "kofi go school"
+    /\b(kofi|ama|kwame|john|mary|peter|sarah|david|jane)\s+(go|come|run|jump|walk|play|eat|drink|sleep|work)\b/i, // proper names + base verb
   ]
 
   return patterns.some((pattern) => pattern.test(text))
@@ -466,6 +481,16 @@ function performBasicGrammarCorrection(text: string): string {
     return `am ${getCorrectVerbForm(verb, "present_continuous")}`
   })
 
+  // Fix "name + base verb" -> "name + goes/is going"
+  corrected = corrected.replace(
+    /\b([a-z]+)\s+(go|come|run|jump|walk|play|eat|drink|sleep|work)(\s+to\s+[a-z]+|\s+[a-z]+|$)/gi,
+    (match, subject, verb, rest) => {
+      // Use simple present for habitual actions, present continuous for ongoing
+      const correctedVerb = getCorrectVerbForm(verb, "simple_present")
+      return `${subject} ${correctedVerb}${rest}`
+    },
+  )
+
   // Fix singular subjects with "have" -> "has"
   corrected = corrected.replace(
     /\b(woman|man|boy|girl|person|student|teacher|doctor|child)\s+have\b/gi,
@@ -473,26 +498,6 @@ function performBasicGrammarCorrection(text: string): string {
       return `${subject} has`
     },
   )
-
-  // Fix he/she/it have -> has
-  corrected = corrected.replace(/\b(he|she|it)\s+have\b/gi, (match, pronoun) => {
-    return `${pronoun} has`
-  })
-
-  // Fix I/you/we/they has -> have
-  corrected = corrected.replace(/\b(I|you|we|they)\s+has\b/gi, (match, pronoun) => {
-    return `${pronoun} have`
-  })
-
-  // Fix "many + singular noun" -> "many + plural noun"
-  corrected = corrected.replace(/\bmany\s+([a-z]+)(?!\s+(are|is|have|has|were|was))\b/gi, (match, noun) => {
-    return `many ${makePlural(noun)}`
-  })
-
-  // Fix "product selling" -> "products for sale"
-  corrected = corrected.replace(/\b([a-z]+)\s+selling\s*$/gi, (match, noun) => {
-    return `${makePlural(noun)} for sale`
-  })
 
   // Capitalize proper nouns (common names)
   const properNouns = ["kofi", "ama", "kwame", "akosua", "john", "mary", "peter", "sarah", "david", "jane"]
@@ -586,6 +591,13 @@ function getGrammarExplanation(original: string, corrected: string): string {
 
   if (/\bare\s+(go|come|run|jump|walk|play|eat|drink|sleep|work)\b/i.test(original)) {
     explanations.push("changed to present continuous tense (are + verb-ing)")
+  }
+
+  if (
+    /\b[a-z]+\s+(go|come|run|jump|walk|play|eat|drink|sleep|work)\b/i.test(original) &&
+    !/\b(is|are|am)\s+(go|come|run|jump|walk|play|eat|drink|sleep|work)\b/i.test(original)
+  ) {
+    explanations.push("added proper verb form (third person singular)")
   }
 
   if (/\b(woman|man|boy|girl|person|student|teacher|doctor|child)\s+have\b/i.test(original)) {

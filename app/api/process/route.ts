@@ -85,25 +85,28 @@ async function callHuggingFaceAPI(
   console.log("[v0] Using Hugging Face API with token:", HF_API_TOKEN.substring(0, 10) + "...")
 
   try {
-    const response = await fetch("https://api-inference.huggingface.co/models/tiiuae/falcon-7b-instruct", {
+    const response = await fetch("https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${HF_API_TOKEN}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        inputs: createEnhancedFalconPrompt(text, analysis, context, learningMode),
+        inputs: {
+          past_user_inputs: context.slice(-2), // Last 2 user messages for context
+          generated_responses: [], // No previous bot responses for simplicity
+          text: createSimplePrompt(text, analysis, learningMode), // Simplified prompt for DialoGPT
+        },
         parameters: {
-          max_new_tokens: learningMode === "advanced" ? 300 : 200,
+          max_length: learningMode === "advanced" ? 300 : 200,
           temperature: learningMode === "casual" ? 0.8 : 0.7,
           do_sample: true,
           top_p: 0.9,
           repetition_penalty: 1.1,
-          return_full_text: false, // Only return generated text, not the prompt
         },
         options: {
-          wait_for_model: true, // Wait if model is loading
-          use_cache: false, // Get fresh responses
+          wait_for_model: true,
+          use_cache: false,
         },
       }),
     })
@@ -122,7 +125,7 @@ async function callHuggingFaceAPI(
 
       if (response.status === 403) {
         console.error(
-          "[v0] 403 Error - Possible causes: Invalid token, insufficient permissions, or model access denied",
+          "[v0] 403 Error - Trying free model. If this persists, check token permissions at https://huggingface.co/settings/tokens",
         )
       } else if (response.status === 503) {
         console.error("[v0] 503 Error - Model is loading, will retry with wait_for_model")
@@ -139,10 +142,10 @@ async function callHuggingFaceAPI(
       return null
     }
 
-    if (Array.isArray(data) && data[0]?.generated_text) {
-      return data[0].generated_text.trim()
-    } else if (data.generated_text) {
+    if (data.generated_text) {
       return data.generated_text.trim()
+    } else if (Array.isArray(data) && data[0]?.generated_text) {
+      return data[0].generated_text.trim()
     }
 
     return null
@@ -150,6 +153,33 @@ async function callHuggingFaceAPI(
     console.error("[v0] Error calling Hugging Face API:", error)
     return null
   }
+}
+
+function createSimplePrompt(text: string, analysis: any, learningMode: string): string {
+  let prompt = ""
+
+  // Add context based on learning mode
+  switch (learningMode) {
+    case "casual":
+      prompt = "As a friendly English assistant, help with: "
+      break
+    case "focused":
+      prompt = "As an English tutor, provide educational help with: "
+      break
+    case "advanced":
+      prompt = "As an advanced English language expert, analyze and help with: "
+      break
+  }
+
+  // Add grammar correction context if needed
+  if (hasObviousGrammarErrors(text)) {
+    prompt += "Please correct the grammar in this sentence: "
+  } else if (text.toLowerCase().includes("correct") || text.toLowerCase().includes("grammar")) {
+    prompt += "Please help with grammar correction: "
+  }
+
+  prompt += text
+  return prompt
 }
 
 function createEnhancedFalconPrompt(text: string, analysis: any, context: string[], learningMode: string): string {
@@ -439,6 +469,7 @@ function hasObviousGrammarErrors(text: string): boolean {
     /\bam\s+(go|come|run|jump|walk|play|eat|drink|sleep|work)\b/i, // "am go", "am come", etc.
     /\b[a-z]+\s+is\s+go\b/i, // "someone is go"
     /\b[a-z]+\s+are\s+go\b/i, // "they are go"
+    /\bam\s+(go|come|run|jump|walk|play|eat|drink|sleep|work)\b/i, // "am go", "am come", etc.
     /\b(woman|man|boy|girl|person|student|teacher|doctor|child)\s+have\b/i, // singular subject + have
     /\bmany\s+[a-z]+(?!\s+(are|is|have|has|were|was))\b/i, // "many product" (missing plural)
     /\b[a-z]+\s+selling\s*$/i, // ending with "selling" (incomplete phrase)

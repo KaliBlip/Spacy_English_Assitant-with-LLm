@@ -85,8 +85,7 @@ async function callHuggingFaceAPI(
   console.log("[v0] Using Hugging Face API with token:", HF_API_TOKEN.substring(0, 10) + "...")
 
   try {
-    // Using microsoft/DialoGPT-medium instead of Falcon (more accessible, no gating)
-    const response = await fetch("https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium", {
+    const response = await fetch("https://api-inference.huggingface.co/models/tiiuae/falcon-7b-instruct", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${HF_API_TOKEN}`,
@@ -100,6 +99,11 @@ async function callHuggingFaceAPI(
           do_sample: true,
           top_p: 0.9,
           repetition_penalty: 1.1,
+          return_full_text: false, // Only return generated text, not the prompt
+        },
+        options: {
+          wait_for_model: true, // Wait if model is loading
+          use_cache: false, // Get fresh responses
         },
       }),
     })
@@ -113,7 +117,17 @@ async function callHuggingFaceAPI(
         status: response.status,
         statusText: response.statusText,
         body: errorText,
+        tokenFormat: HF_API_TOKEN.startsWith("hf_") ? "Valid format" : "Invalid format - should start with hf_",
       })
+
+      if (response.status === 403) {
+        console.error(
+          "[v0] 403 Error - Possible causes: Invalid token, insufficient permissions, or model access denied",
+        )
+      } else if (response.status === 503) {
+        console.error("[v0] 503 Error - Model is loading, will retry with wait_for_model")
+      }
+
       return null
     }
 
@@ -125,13 +139,10 @@ async function callHuggingFaceAPI(
       return null
     }
 
-    if (data[0]?.generated_text) {
-      const fullText = data[0].generated_text
-      const promptEnd = fullText.indexOf("Assistant:")
-      if (promptEnd !== -1) {
-        return fullText.substring(promptEnd + 10).trim()
-      }
-      return fullText.trim()
+    if (Array.isArray(data) && data[0]?.generated_text) {
+      return data[0].generated_text.trim()
+    } else if (data.generated_text) {
+      return data.generated_text.trim()
     }
 
     return null
@@ -142,46 +153,46 @@ async function callHuggingFaceAPI(
 }
 
 function createEnhancedFalconPrompt(text: string, analysis: any, context: string[], learningMode: string): string {
-  let prompt = "You are an advanced English language assistant. "
+  let prompt = "### Instruction:\nYou are an expert English language assistant. "
 
   // Adjust behavior based on learning mode
   switch (learningMode) {
     case "casual":
-      prompt += "Provide helpful, conversational responses about English language topics.\n\n"
+      prompt +=
+        "Provide helpful, friendly responses about English language topics. Be conversational and encouraging.\n"
       break
     case "focused":
-      prompt += "Focus on educational content, provide clear explanations, and include learning opportunities.\n\n"
+      prompt += "Focus on educational content with clear explanations and practical learning opportunities.\n"
       break
     case "advanced":
-      prompt += "Provide detailed linguistic analysis, advanced grammar concepts, and comprehensive explanations.\n\n"
+      prompt +=
+        "Provide detailed linguistic analysis, advanced grammar concepts, and comprehensive explanations with examples.\n"
       break
   }
 
   // Add conversation context
   if (context.length > 0) {
-    prompt += "Previous conversation context:\n"
-    context.forEach((msg, idx) => {
+    prompt += "\nPrevious conversation:\n"
+    context.slice(-3).forEach((msg, idx) => {
       prompt += `${idx + 1}. ${msg}\n`
     })
-    prompt += "\n"
   }
 
   // Add spaCy analysis context
   if (analysis) {
-    prompt += "Text Analysis:\n"
+    prompt += "\nText Analysis Results:\n"
     if (analysis.entities && analysis.entities.length > 0) {
-      prompt += `- Entities: ${analysis.entities.map((e: any) => `${e.text} (${e.label})`).join(", ")}\n`
+      prompt += `- Named entities: ${analysis.entities.map((e: any) => `${e.text} (${e.label})`).join(", ")}\n`
     }
     if (analysis.statistics) {
-      prompt += `- Statistics: ${analysis.statistics.num_sentences} sentences, ${analysis.statistics.num_words} words\n`
+      prompt += `- Text stats: ${analysis.statistics.num_sentences} sentences, ${analysis.statistics.num_words} words\n`
     }
     if (analysis.grammar_issues && analysis.grammar_issues.length > 0) {
-      prompt += `- Grammar issues: ${analysis.grammar_issues.length} detected\n`
+      prompt += `- Grammar issues found: ${analysis.grammar_issues.length}\n`
     }
-    prompt += "\n"
   }
 
-  prompt += `User: ${text}\n\nAssistant:`
+  prompt += `\n### Input:\n${text}\n\n### Response:\n`
   return prompt
 }
 
@@ -339,30 +350,6 @@ async function callLocalFalcon(
     console.log("Local Falcon server not available, using fallback")
     return null
   }
-}
-
-function createFalconPrompt(text: string, analysis: any): string {
-  let prompt =
-    "You are an English language assistant. Help users with grammar, writing, language analysis, and English learning.\n\n"
-
-  // Add context from spaCy analysis if available
-  if (analysis) {
-    prompt += "Text Analysis:\n"
-    if (analysis.entities && analysis.entities.length > 0) {
-      prompt += `- Entities found: ${analysis.entities.map((e: any) => `${e.text} (${e.label})`).join(", ")}\n`
-    }
-    if (analysis.statistics) {
-      prompt += `- ${analysis.statistics.num_sentences} sentences, ${analysis.statistics.num_words} words\n`
-    }
-    if (analysis.grammar_issues && analysis.grammar_issues.length > 0) {
-      prompt += `- Grammar issues detected: ${analysis.grammar_issues.length}\n`
-    }
-    prompt += "\n"
-  }
-
-  prompt += `User: ${text}\n\nAssistant:`
-
-  return prompt
 }
 
 function generateEnhancedFallbackResponse(

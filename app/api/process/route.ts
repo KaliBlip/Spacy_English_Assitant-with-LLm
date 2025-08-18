@@ -440,6 +440,11 @@ function hasObviousGrammarErrors(text: string): boolean {
     /\bam\s+(go|come|run|jump|walk|play|eat|drink|sleep|work)\b/i, // "am go", "am come", etc.
     /\b[a-z]+\s+is\s+go\b/i, // "someone is go"
     /\b[a-z]+\s+are\s+go\b/i, // "they are go"
+    /\b(woman|man|boy|girl|person|student|teacher|doctor|child)\s+have\b/i, // singular subject + have
+    /\bmany\s+[a-z]+(?!\s+(are|is|have|has|were|was))\b/i, // "many product" (missing plural)
+    /\b[a-z]+\s+selling\s*$/i, // ending with "selling" (incomplete phrase)
+    /\b(he|she|it)\s+have\b/i, // he/she/it have (should be has)
+    /\b(I|you|we|they)\s+has\b/i, // I/you/we/they has (should be have)
   ]
 
   return patterns.some((pattern) => pattern.test(text))
@@ -461,6 +466,34 @@ function performBasicGrammarCorrection(text: string): string {
     return `am ${getCorrectVerbForm(verb, "present_continuous")}`
   })
 
+  // Fix singular subjects with "have" -> "has"
+  corrected = corrected.replace(
+    /\b(woman|man|boy|girl|person|student|teacher|doctor|child)\s+have\b/gi,
+    (match, subject) => {
+      return `${subject} has`
+    },
+  )
+
+  // Fix he/she/it have -> has
+  corrected = corrected.replace(/\b(he|she|it)\s+have\b/gi, (match, pronoun) => {
+    return `${pronoun} has`
+  })
+
+  // Fix I/you/we/they has -> have
+  corrected = corrected.replace(/\b(I|you|we|they)\s+has\b/gi, (match, pronoun) => {
+    return `${pronoun} have`
+  })
+
+  // Fix "many + singular noun" -> "many + plural noun"
+  corrected = corrected.replace(/\bmany\s+([a-z]+)(?!\s+(are|is|have|has|were|was))\b/gi, (match, noun) => {
+    return `many ${makePlural(noun)}`
+  })
+
+  // Fix "product selling" -> "products for sale"
+  corrected = corrected.replace(/\b([a-z]+)\s+selling\s*$/gi, (match, noun) => {
+    return `${makePlural(noun)} for sale`
+  })
+
   // Capitalize proper nouns (common names)
   const properNouns = ["kofi", "ama", "kwame", "akosua", "john", "mary", "peter", "sarah", "david", "jane"]
   properNouns.forEach((name) => {
@@ -475,6 +508,52 @@ function performBasicGrammarCorrection(text: string): string {
   corrected = corrected.replace(/\s+/g, " ").trim()
 
   return corrected
+}
+
+function makePlural(noun: string): string {
+  const lowerNoun = noun.toLowerCase()
+
+  // Common irregular plurals
+  const irregulars: { [key: string]: string } = {
+    child: "children",
+    person: "people",
+    man: "men",
+    woman: "women",
+    foot: "feet",
+    tooth: "teeth",
+    mouse: "mice",
+    goose: "geese",
+  }
+
+  if (irregulars[lowerNoun]) {
+    return irregulars[lowerNoun]
+  }
+
+  // Regular plural rules
+  if (
+    lowerNoun.endsWith("s") ||
+    lowerNoun.endsWith("sh") ||
+    lowerNoun.endsWith("ch") ||
+    lowerNoun.endsWith("x") ||
+    lowerNoun.endsWith("z")
+  ) {
+    return noun + "es"
+  }
+
+  if (lowerNoun.endsWith("y") && !"aeiou".includes(lowerNoun[lowerNoun.length - 2])) {
+    return noun.slice(0, -1) + "ies"
+  }
+
+  if (lowerNoun.endsWith("f")) {
+    return noun.slice(0, -1) + "ves"
+  }
+
+  if (lowerNoun.endsWith("fe")) {
+    return noun.slice(0, -2) + "ves"
+  }
+
+  // Default: add 's'
+  return noun + "s"
 }
 
 function getCorrectVerbForm(verb: string, tense: string): string {
@@ -507,6 +586,18 @@ function getGrammarExplanation(original: string, corrected: string): string {
 
   if (/\bare\s+(go|come|run|jump|walk|play|eat|drink|sleep|work)\b/i.test(original)) {
     explanations.push("changed to present continuous tense (are + verb-ing)")
+  }
+
+  if (/\b(woman|man|boy|girl|person|student|teacher|doctor|child)\s+have\b/i.test(original)) {
+    explanations.push("fixed subject-verb agreement (singular subject takes 'has')")
+  }
+
+  if (/\bmany\s+[a-z]+(?!\s+(are|is|have|has|were|was))\b/i.test(original)) {
+    explanations.push("made noun plural after 'many'")
+  }
+
+  if (/\b[a-z]+\s+selling\s*$/i.test(original)) {
+    explanations.push("improved phrase structure")
   }
 
   return explanations.length > 0 ? explanations.join(", ") : "improved sentence structure"

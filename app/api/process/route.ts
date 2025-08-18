@@ -361,12 +361,18 @@ function generateEnhancedFallbackResponse(
 ): string {
   const lowerText = text.toLowerCase()
 
-  // Grammar-related queries
-  if (lowerText.includes("grammar") || lowerText.includes("correct")) {
+  if (lowerText.includes("grammar") || lowerText.includes("correct") || hasObviousGrammarErrors(text)) {
+    const correctedText = performBasicGrammarCorrection(text)
+
+    if (correctedText !== text) {
+      return `Here's the corrected version:\n\n**Original:** ${text}\n**Corrected:** ${correctedText}\n\nKey changes: ${getGrammarExplanation(text, correctedText)}`
+    }
+
     if (analysis?.grammar_issues && analysis.grammar_issues.length > 0) {
       return `I found ${analysis.grammar_issues.length} potential grammar issue(s) in your text. ${analysis.grammar_issues[0].message} Would you like me to help you fix these issues?`
     }
-    return "I can help you check grammar! Please provide the text you'd like me to review, and I'll analyze it for grammatical errors and suggest improvements."
+
+    return "Your grammar looks good! If you have specific text you'd like me to check, please share it and I'll provide detailed corrections and explanations."
   }
 
   // Writing assistance
@@ -424,4 +430,84 @@ function generateEnhancedFallbackResponse(
   ]
 
   return responses[Math.floor(Math.random() * responses.length)]
+}
+
+// Helper functions for grammar correction
+function hasObviousGrammarErrors(text: string): boolean {
+  const patterns = [
+    /\bis\s+(go|come|run|jump|walk|play|eat|drink|sleep|work)\b/i, // "is go", "is come", etc.
+    /\bare\s+(go|come|run|jump|walk|play|eat|drink|sleep|work)\b/i, // "are go", "are come", etc.
+    /\bam\s+(go|come|run|jump|walk|play|eat|drink|sleep|work)\b/i, // "am go", "am come", etc.
+    /\b[a-z]+\s+is\s+go\b/i, // "someone is go"
+    /\b[a-z]+\s+are\s+go\b/i, // "they are go"
+  ]
+
+  return patterns.some((pattern) => pattern.test(text))
+}
+
+function performBasicGrammarCorrection(text: string): string {
+  let corrected = text
+
+  // Fix common verb form errors
+  corrected = corrected.replace(/\bis\s+(go|come|run|jump|walk|play|eat|drink|sleep|work)\b/gi, (match, verb) => {
+    return `is ${getCorrectVerbForm(verb, "present_continuous")}`
+  })
+
+  corrected = corrected.replace(/\bare\s+(go|come|run|jump|walk|play|eat|drink|sleep|work)\b/gi, (match, verb) => {
+    return `are ${getCorrectVerbForm(verb, "present_continuous")}`
+  })
+
+  corrected = corrected.replace(/\bam\s+(go|come|run|jump|walk|play|eat|drink|sleep|work)\b/gi, (match, verb) => {
+    return `am ${getCorrectVerbForm(verb, "present_continuous")}`
+  })
+
+  // Capitalize proper nouns (common names)
+  const properNouns = ["kofi", "ama", "kwame", "akosua", "john", "mary", "peter", "sarah", "david", "jane"]
+  properNouns.forEach((name) => {
+    const regex = new RegExp(`\\b${name}\\b`, "gi")
+    corrected = corrected.replace(regex, name.charAt(0).toUpperCase() + name.slice(1).toLowerCase())
+  })
+
+  // Capitalize first letter of sentence
+  corrected = corrected.charAt(0).toUpperCase() + corrected.slice(1)
+
+  // Fix double spaces
+  corrected = corrected.replace(/\s+/g, " ").trim()
+
+  return corrected
+}
+
+function getCorrectVerbForm(verb: string, tense: string): string {
+  const verbForms: { [key: string]: { [key: string]: string } } = {
+    go: { present_continuous: "going", simple_present: "goes" },
+    come: { present_continuous: "coming", simple_present: "comes" },
+    run: { present_continuous: "running", simple_present: "runs" },
+    jump: { present_continuous: "jumping", simple_present: "jumps" },
+    walk: { present_continuous: "walking", simple_present: "walks" },
+    play: { present_continuous: "playing", simple_present: "plays" },
+    eat: { present_continuous: "eating", simple_present: "eats" },
+    drink: { present_continuous: "drinking", simple_present: "drinks" },
+    sleep: { present_continuous: "sleeping", simple_present: "sleeps" },
+    work: { present_continuous: "working", simple_present: "works" },
+  }
+
+  return verbForms[verb.toLowerCase()]?.[tense] || verb
+}
+
+function getGrammarExplanation(original: string, corrected: string): string {
+  const explanations = []
+
+  if (original.toLowerCase() !== corrected.toLowerCase()) {
+    explanations.push("capitalized proper nouns")
+  }
+
+  if (/\bis\s+(go|come|run|jump|walk|play|eat|drink|sleep|work)\b/i.test(original)) {
+    explanations.push("changed to present continuous tense (is + verb-ing)")
+  }
+
+  if (/\bare\s+(go|come|run|jump|walk|play|eat|drink|sleep|work)\b/i.test(original)) {
+    explanations.push("changed to present continuous tense (are + verb-ing)")
+  }
+
+  return explanations.length > 0 ? explanations.join(", ") : "improved sentence structure"
 }

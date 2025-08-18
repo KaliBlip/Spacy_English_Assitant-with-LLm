@@ -11,6 +11,10 @@
     "start": "next start",
     "start-ai": "python3 scripts/start_servers.py"
   },
+  "overrides": {
+    "react": "^19",
+    "react-dom": "^19"
+  },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
     "@radix-ui/react-accordion": "1.2.2",
@@ -60,7 +64,6 @@
     "sonner": "^1.7.4",
     "tailwind-merge": "^2.5.5",
     "tailwindcss-animate": "^1.0.7",
-    "vaul": "^0.9.9",
     "web-speech-api": "latest",
     "zod": "3.25.67"
   },

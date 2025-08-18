@@ -64,7 +64,6 @@
     "sonner": "^1.7.4",
     "tailwind-merge": "^2.5.5",
     "tailwindcss-animate": "^1.0.7",
-    "web-speech-api": "latest",
     "zod": "3.25.67"
   },
   "devDependencies": {

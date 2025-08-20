@@ -6,10 +6,10 @@
     "build": "next build",
     "dev": "next dev",
     "lint": "next lint",
-    "setup": "python3 scripts/install_dependencies.py",
+    "setup": "python scripts/install_dependencies.py",
     "setup-full": "npm run setup && npm install",
     "start": "next start",
-    "start-ai": "python3 scripts/start_servers.py"
+    "start-ai": "python scripts/start_servers.py"
   },
   "overrides": {
     "react": "^19",

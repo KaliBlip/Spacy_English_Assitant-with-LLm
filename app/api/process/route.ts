@@ -49,19 +49,21 @@ async function generateResponseWithFalcon(
   learningMode = "casual",
 ): Promise<string> {
   try {
-    // First, try Hugging Face API
-    const hfResponse = await callHuggingFaceAPI(text, analysis, context, learningMode)
-    if (hfResponse) {
-      return hfResponse
-    }
-
-    // Fallback to local Falcon model
     const localResponse = await callLocalFalcon(text, analysis, context, learningMode)
     if (localResponse) {
+      console.log("[v0] Using local Falcon server response")
       return localResponse
     }
 
+    // Fallback to Hugging Face API if local server unavailable
+    const hfResponse = await callHuggingFaceAPI(text, analysis, context, learningMode)
+    if (hfResponse) {
+      console.log("[v0] Using Hugging Face API response")
+      return hfResponse
+    }
+
     // Final fallback to enhanced rule-based responses
+    console.log("[v0] Using enhanced fallback response")
     return generateEnhancedFallbackResponse(text, analysis, context, learningMode)
   } catch (error) {
     console.error("Error in Falcon response generation:", error)
@@ -85,24 +87,21 @@ async function callHuggingFaceAPI(
   console.log("[v0] Using Hugging Face API with token:", HF_API_TOKEN.substring(0, 10) + "...")
 
   try {
-    const response = await fetch("https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium", {
+    const response = await fetch("https://api-inference.huggingface.co/models/gpt2", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${HF_API_TOKEN}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        inputs: {
-          past_user_inputs: context.slice(-2), // Last 2 user messages for context
-          generated_responses: [], // No previous bot responses for simplicity
-          text: createSimplePrompt(text, analysis, learningMode), // Simplified prompt for DialoGPT
-        },
+        inputs: createSimplePrompt(text, analysis, learningMode),
         parameters: {
-          max_length: learningMode === "advanced" ? 300 : 200,
+          max_length: learningMode === "advanced" ? 150 : 100,
           temperature: learningMode === "casual" ? 0.8 : 0.7,
           do_sample: true,
           top_p: 0.9,
           repetition_penalty: 1.1,
+          return_full_text: false, // Only return generated text, not the prompt
         },
         options: {
           wait_for_model: true,
@@ -124,9 +123,9 @@ async function callHuggingFaceAPI(
       })
 
       if (response.status === 403) {
-        console.error(
-          "[v0] 403 Error - Trying free model. If this persists, check token permissions at https://huggingface.co/settings/tokens",
-        )
+        console.error("[v0] 403 Error - Check token permissions at https://huggingface.co/settings/tokens")
+      } else if (response.status === 404) {
+        console.error("[v0] 404 Error - Model not found or endpoint incorrect")
       } else if (response.status === 503) {
         console.error("[v0] 503 Error - Model is loading, will retry with wait_for_model")
       }
@@ -142,10 +141,23 @@ async function callHuggingFaceAPI(
       return null
     }
 
-    if (data.generated_text) {
-      return data.generated_text.trim()
-    } else if (Array.isArray(data) && data[0]?.generated_text) {
-      return data[0].generated_text.trim()
+    if (Array.isArray(data) && data[0]?.generated_text) {
+      const generatedText = data[0].generated_text.trim()
+
+      // Clean up the response
+      const cleanResponse = generatedText
+        .replace(/^(Assistant:|Bot:|AI:)\s*/i, "")
+        .replace(/\s*<\|endoftext\|>\s*$/, "")
+        .trim()
+
+      return cleanResponse || generatedText
+    } else if (data.generated_text) {
+      const cleanResponse = data.generated_text
+        .replace(/^(Assistant:|Bot:|AI:)\s*/i, "")
+        .replace(/\s*<\|endoftext\|>\s*$/, "")
+        .trim()
+
+      return cleanResponse || data.generated_text
     }
 
     return null
@@ -158,27 +170,24 @@ async function callHuggingFaceAPI(
 function createSimplePrompt(text: string, analysis: any, learningMode: string): string {
   let prompt = ""
 
-  // Add context based on learning mode
-  switch (learningMode) {
-    case "casual":
-      prompt = "As a friendly English assistant, help with: "
-      break
-    case "focused":
-      prompt = "As an English tutor, provide educational help with: "
-      break
-    case "advanced":
-      prompt = "As an advanced English language expert, analyze and help with: "
-      break
-  }
-
-  // Add grammar correction context if needed
   if (hasObviousGrammarErrors(text)) {
-    prompt += "Please correct the grammar in this sentence: "
+    prompt = `Correct this English sentence: "${text}"\nCorrected version:`
   } else if (text.toLowerCase().includes("correct") || text.toLowerCase().includes("grammar")) {
-    prompt += "Please help with grammar correction: "
+    prompt = `English Teacher: I'll help you with grammar and language learning.\n\nStudent: ${text}\n\nTeacher:`
+  } else {
+    switch (learningMode) {
+      case "casual":
+        prompt = `English Helper: I'll assist you with English in a friendly way.\n\nQuestion: ${text}\n\nAnswer:`
+        break
+      case "focused":
+        prompt = `English Tutor: I provide educational help with clear explanations.\n\nStudent: ${text}\n\nTutor:`
+        break
+      case "advanced":
+        prompt = `English Expert: I provide detailed linguistic analysis and advanced help.\n\nQuery: ${text}\n\nExpert Analysis:`
+        break
+    }
   }
 
-  prompt += text
   return prompt
 }
 
@@ -359,25 +368,55 @@ async function callLocalFalcon(
   learningMode: string,
 ): Promise<string | null> {
   try {
-    // Call local Falcon server (if running)
+    console.log("[v0] Attempting to connect to local Falcon server...")
+
+    // First check if server is healthy
+    const healthResponse = await fetch("http://localhost:8001/health", {
+      method: "GET",
+      signal: AbortSignal.timeout(2000), // 2 second timeout
+    })
+
+    if (!healthResponse.ok) {
+      console.log("[v0] Local Falcon server health check failed")
+      return null
+    }
+
+    const healthData = await healthResponse.json()
+    if (!healthData.model_loaded) {
+      console.log("[v0] Local Falcon server running but model not loaded")
+      return null
+    }
+
+    console.log("[v0] Local Falcon server is healthy, generating response...")
+
+    // Call local Falcon server for generation
     const response = await fetch("http://localhost:8001/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         prompt: createEnhancedFalconPrompt(text, analysis, context, learningMode),
-        max_tokens: 200,
-        temperature: 0.7,
+        max_tokens: learningMode === "advanced" ? 250 : 200,
+        temperature: learningMode === "casual" ? 0.8 : 0.7,
       }),
+      signal: AbortSignal.timeout(30000), // 30 second timeout for generation
     })
 
     if (!response.ok) {
+      console.log("[v0] Local Falcon generation failed with status:", response.status)
       return null
     }
 
     const data = await response.json()
+    console.log("[v0] Local Falcon response received, length:", data.response?.length || 0)
     return data.response || null
   } catch (error) {
-    console.log("Local Falcon server not available, using fallback")
+    if (error.name === "TimeoutError") {
+      console.log("[v0] Local Falcon server timeout")
+    } else if (error.code === "ECONNREFUSED") {
+      console.log("[v0] Local Falcon server not running on port 8001")
+    } else {
+      console.log("[v0] Local Falcon server error:", error.message)
+    }
     return null
   }
 }
@@ -394,7 +433,8 @@ function generateEnhancedFallbackResponse(
     const correctedText = performBasicGrammarCorrection(text)
 
     if (correctedText !== text) {
-      return `Here's the corrected version:\n\n**Original:** ${text}\n**Corrected:** ${correctedText}\n\nKey changes: ${getGrammarExplanation(text, correctedText)}`
+      const explanation = getGrammarExplanation(text, correctedText)
+      return `Here's the corrected version:\n\n**Original:** ${text}\n**Corrected:** ${correctedText}\n\n**Explanation:** ${explanation}\n\nWould you like me to explain any specific grammar rules?`
     }
 
     if (analysis?.grammar_issues && analysis.grammar_issues.length > 0) {
@@ -404,7 +444,18 @@ function generateEnhancedFallbackResponse(
     return "Your grammar looks good! If you have specific text you'd like me to check, please share it and I'll provide detailed corrections and explanations."
   }
 
-  // Writing assistance
+  if (context.length > 0) {
+    const lastMessage = context[context.length - 1]?.toLowerCase() || ""
+
+    if (lastMessage.includes("thank") || lastMessage.includes("thanks")) {
+      return "You're welcome! I'm here to help you improve your English. Feel free to ask me about grammar, writing, or any language questions you have."
+    }
+
+    if (lastMessage.includes("good") || lastMessage.includes("great") || lastMessage.includes("perfect")) {
+      return "I'm glad I could help! Keep practicing - that's the best way to improve your English skills. What else would you like to work on?"
+    }
+  }
+
   if (lowerText.includes("write") || lowerText.includes("writing") || lowerText.includes("improve")) {
     const suggestions = []
     if (analysis?.statistics) {
@@ -417,48 +468,74 @@ function generateEnhancedFallbackResponse(
     }
 
     if (suggestions.length > 0) {
-      return `Here are some writing suggestions for your text: ${suggestions.join(" ")} Would you like more specific feedback?`
+      return `Here are some writing suggestions for your text:\n\n${suggestions.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n\nWould you like more specific feedback on any aspect?`
     }
-    return "I'd be happy to help improve your writing! I can assist with clarity, style, grammar, and structure. What specific aspect would you like to work on?"
+
+    return "I'd be happy to help improve your writing! I can assist with:\n• Grammar and punctuation\n• Sentence structure and clarity\n• Vocabulary enhancement\n• Writing style and tone\n\nWhat specific aspect would you like to work on?"
   }
 
-  // Analysis requests
   if (lowerText.includes("analyze") || lowerText.includes("analysis")) {
     if (analysis) {
-      let response = "Here's my analysis of your text:\n\n"
+      let response = "Here's my detailed analysis of your text:\n\n"
+
       if (analysis.entities && analysis.entities.length > 0) {
-        response += `• Found ${analysis.entities.length} named entities: ${analysis.entities
-          .slice(0, 3)
-          .map((e: any) => e.text)
-          .join(", ")}\n`
+        response += `📍 **Named Entities:** Found ${analysis.entities.length} entities\n`
+        analysis.entities.slice(0, 3).forEach((e: any) => {
+          response += `   • ${e.text} (${e.label})\n`
+        })
       }
+
       if (analysis.statistics) {
-        response += `• Text statistics: ${analysis.statistics.num_sentences} sentences, ${analysis.statistics.num_words} words\n`
+        response += `📊 **Text Statistics:**\n`
+        response += `   • ${analysis.statistics.num_sentences} sentences\n`
+        response += `   • ${analysis.statistics.num_words} words\n`
+        response += `   • Average ${Math.round(analysis.statistics.num_words / analysis.statistics.num_sentences)} words per sentence\n`
       }
+
       if (analysis.grammar_issues && analysis.grammar_issues.length > 0) {
-        response += `• Grammar: ${analysis.grammar_issues.length} potential issues detected\n`
+        response += `✏️ **Grammar:** ${analysis.grammar_issues.length} potential issues detected\n`
+      } else {
+        response += `✅ **Grammar:** No obvious issues found\n`
       }
+
       response += "\nWould you like me to elaborate on any of these aspects?"
       return response
     }
     return "I can analyze text for various linguistic features including entities, grammar, style, and structure. Please provide the text you'd like me to analyze."
   }
 
-  // Entity-related responses
-  if (analysis?.entities && analysis.entities.length > 0) {
-    const entityTypes = [...new Set(analysis.entities.map((e: any) => e.label))]
-    return `I've identified several important elements in your text, including ${entityTypes.join(", ").toLowerCase()} entities. Your text appears to be about ${analysis.entities[0].text}. How can I help you work with this content?`
+  if (learningMode === "advanced") {
+    if (analysis?.entities && analysis.entities.length > 0) {
+      const entityTypes = [...new Set(analysis.entities.map((e: any) => e.label))]
+      return `From a linguistic perspective, your text contains ${entityTypes.join(", ").toLowerCase()} entities, indicating this is ${getTextType(entityTypes)} text. The entity "${analysis.entities[0].text}" serves as the primary focus. Would you like me to analyze the syntactic structure or semantic relationships?`
+    }
+  } else if (learningMode === "focused") {
+    if (analysis?.entities && analysis.entities.length > 0) {
+      return `Great! I can see your text mentions ${analysis.entities[0].text}. This gives us a good opportunity to practice English. Would you like to:\n• Practice describing this topic\n• Learn related vocabulary\n• Work on sentence structure\n• Check grammar and spelling?`
+    }
   }
 
-  // Default helpful responses
-  const responses = [
-    "I'm here to help you with English language tasks! I can assist with grammar checking, writing improvement, text analysis, and language learning. What would you like to work on?",
-    "I've processed your message and I'm ready to help! I can analyze text, check grammar, provide writing suggestions, or answer questions about English language usage.",
-    "Thank you for your input! I specialize in helping with English language tasks including grammar, writing, analysis, and learning. How can I assist you today?",
-    "I'm your English language assistant! I can help with grammar correction, writing enhancement, text analysis, and language questions. What specific help do you need?",
+  if (analysis?.entities && analysis.entities.length > 0) {
+    const mainEntity = analysis.entities[0]
+    const entityType = mainEntity.label.toLowerCase()
+
+    if (entityType.includes("person")) {
+      return `I see you're writing about ${mainEntity.text}. Would you like help with:\n• Describing people and their actions\n• Using proper pronouns (he/she/they)\n• Past, present, or future tense\n• Making your writing more descriptive?`
+    } else if (entityType.includes("place") || entityType.includes("gpe")) {
+      return `You're writing about ${mainEntity.text}! Would you like help with:\n• Describing places and locations\n• Using prepositions (in, at, on, to)\n• Travel and location vocabulary\n• Writing about experiences?`
+    }
+  }
+
+  const helpfulResponses = [
+    "I'm your English language assistant! I can help you with:\n• Grammar checking and correction\n• Writing improvement and style\n• Text analysis and feedback\n• Vocabulary and word choice\n• Sentence structure and clarity\n\nWhat would you like to work on?",
+
+    "Hello! I'm here to help you improve your English. I can:\n• Fix grammar mistakes\n• Suggest better word choices\n• Analyze your writing style\n• Explain grammar rules\n• Help with sentence structure\n\nJust share your text or ask me a question!",
+
+    "Great to see you practicing English! I can assist with:\n• Correcting grammar errors\n• Improving sentence flow\n• Expanding vocabulary\n• Checking spelling and punctuation\n• Providing writing tips\n\nWhat specific help do you need today?",
   ]
 
-  return responses[Math.floor(Math.random() * responses.length)]
+  const responseIndex = learningMode === "casual" ? 0 : learningMode === "focused" ? 1 : 2
+  return helpfulResponses[responseIndex]
 }
 
 // Helper functions for grammar correction
@@ -631,4 +708,12 @@ function getGrammarExplanation(original: string, corrected: string): string {
   }
 
   return explanations.length > 0 ? explanations.join(", ") : "improved sentence structure"
+}
+
+function getTextType(entityTypes: string[]): string {
+  if (entityTypes.includes("PERSON")) return "biographical or narrative"
+  if (entityTypes.includes("GPE") || entityTypes.includes("LOC")) return "geographical or descriptive"
+  if (entityTypes.includes("ORG")) return "informational or business-related"
+  if (entityTypes.includes("DATE") || entityTypes.includes("TIME")) return "temporal or event-based"
+  return "general informational"
 }

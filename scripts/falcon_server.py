@@ -38,22 +38,24 @@ def load_falcon_model():
         tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         tokenizer.pad_token = tokenizer.eos_token
         
-        # Load model with optimizations
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             trust_remote_code=True,
             device_map="auto",
             torch_dtype=torch.float16,
-            load_in_8bit=True,  # Use 8-bit quantization to save memory
+            load_in_8bit=True,  # 8-bit quantization saves ~50% memory
+            max_memory={0: "10GB"},  # Reserve 1GB for other operations
+            low_cpu_mem_usage=True,  # Reduce CPU memory usage during loading
         )
         
-        # Create generation pipeline
+        # Create generation pipeline with memory-efficient settings
         generator = pipeline(
             "text-generation",
             model=model,
             tokenizer=tokenizer,
             device_map="auto",
             torch_dtype=torch.float16,
+            batch_size=1,  # Process one request at a time
         )
         
         logger.info("Falcon model loaded successfully!")
@@ -61,7 +63,7 @@ def load_falcon_model():
         
     except Exception as e:
         logger.error(f"Failed to load Falcon model: {str(e)}")
-        logger.error("Make sure you have sufficient GPU memory (16GB+ recommended)")
+        logger.error("Make sure you have sufficient GPU memory (11GB+ for GTX 1080 Ti)")
         return False
 
 @app.route('/health', methods=['GET'])
@@ -161,10 +163,10 @@ def unload_model():
 if __name__ == '__main__':
     print("🚀 Starting Falcon LLM Server...")
     print("=" * 50)
-    print("⚠️  WARNING: This server requires significant GPU memory (16GB+ recommended)")
+    print("⚠️  WARNING: This server requires significant GPU memory")
     print("⚠️  Loading Falcon-7B model may take several minutes")
     print("\n📋 System Requirements:")
-    print("   - CUDA-compatible GPU with 16GB+ VRAM")
+    print("   - CUDA-compatible GPU with 11GB+ VRAM (GTX 1080 Ti supported)")
     print("   - PyTorch with CUDA support")
     print("   - transformers, accelerate, bitsandbytes libraries")
     
@@ -174,9 +176,11 @@ if __name__ == '__main__':
         print(f"\n✅ GPU detected: {gpu_name}")
         print(f"✅ GPU memory: {gpu_memory:.1f} GB")
         
-        if gpu_memory < 15:
+        if gpu_memory < 10:
             print("⚠️  Warning: GPU memory may be insufficient for Falcon-7B")
             print("   Consider using a smaller model or cloud GPU")
+        elif gpu_memory >= 10 and gpu_memory < 16:
+            print("✅ GTX 1080 Ti detected - using optimized 8-bit quantization")
     else:
         print("❌ No CUDA GPU detected. This server requires GPU for reasonable performance.")
         print("   CPU inference will be extremely slow and not recommended.")
